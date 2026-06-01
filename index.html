@@ -184,6 +184,12 @@
   #browse-mode    { display: none; }
   #quiz-mode      { display: none; }
 
+  .progress-label {
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: var(--muted); letter-spacing: .1em;
+    text-transform: uppercase; margin-bottom: 4px;
+  }
+
   .progress-track {
     background: var(--border); border-radius: 99px;
     height: 3px; margin-bottom: 20px; overflow: hidden;
@@ -203,9 +209,13 @@
   }
 
   /* ── The card ── */
-  .card-scene { perspective: 1000px; margin-bottom: 20px; }
+  .card-scene {
+    perspective: 1000px;
+    margin-bottom: 20px;
+    height: 300px;          /* explicit height so absolute children fill it */
+  }
   .card-3d {
-    width: 100%; min-height: 260px;
+    width: 100%; height: 100%;
     position: relative;
     transform-style: preserve-3d;
     transition: transform .5s cubic-bezier(.4,0,.2,1);
@@ -215,6 +225,7 @@
   .card-face {
     position: absolute; inset: 0;
     backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
     border-radius: 6px;
     border: 1px solid var(--border);
     display: flex; flex-direction: column;
@@ -222,6 +233,7 @@
     padding: 32px 24px;
     text-align: center;
     gap: 12px;
+    overflow-y: auto;
   }
   .card-front {
     background: var(--card-bg);
@@ -376,6 +388,18 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
 
+  /* ── Keyboard hint ── */
+  .kbd-hint {
+    text-align: center; font-size: 10px; color: var(--muted);
+    letter-spacing: .12em; margin-bottom: 10px;
+    text-transform: uppercase;
+  }
+  .kbd-hint kbd {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 5px; font-size: 10px;
+    font-family: 'Share Tech Mono', monospace;
+  }
+
   /* ── Learned badge ── */
   .learned-badge {
     display: inline-flex; align-items: center; gap: 5px;
@@ -387,10 +411,11 @@
   /* ── Toast ── */
   #toast {
     position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
-    background: var(--panel); border: 1px solid var(--border);
+    background: var(--panel); border: 1px solid var(--pink);
     border-radius: 4px; padding: 10px 20px;
     font-size: 12px; letter-spacing: .1em;
-    transition: transform .3s ease; z-index: 100;
+    color: var(--white);
+    transition: transform .3s ease; z-index: 1001;
     pointer-events: none;
   }
   #toast.show { transform: translateX(-50%) translateY(0); }
@@ -429,6 +454,7 @@
       <span class="squid-symbol">○</span>
       <h1>Hebrew <span>Vocab</span></h1>
       <span class="squid-symbol">△</span>
+      <span class="squid-symbol" style="color:var(--teal);text-shadow:0 0 12px var(--teal-glow)">□</span>
     </div>
     <p class="subtitle">Squid Game Edition · Vocabulary Lists I – III</p>
   </header>
@@ -456,10 +482,21 @@
       <button class="btn small" onclick="resetLearned()">⊘ Reset</button>
     </div>
 
+    <p class="kbd-hint">
+      <kbd>←</kbd> <kbd>→</kbd> navigate &nbsp;|&nbsp;
+      <kbd>Space</kbd> flip &nbsp;|&nbsp;
+      <kbd>E</kbd> easy &nbsp;|&nbsp;
+      <kbd>H</kbd> hard
+    </p>
+
+    <div class="progress-label">
+      <span id="prog-label-left">Card 1 of 1</span>
+      <span id="prog-label-right">0 learned</span>
+    </div>
     <div class="progress-track">
       <div class="progress-fill" id="progress-fill" style="width:0%"></div>
     </div>
-    <div class="card-counter" id="card-counter">Card 1 of 1</div>
+    <div class="card-counter" id="card-counter" aria-hidden="true" style="display:none"></div>
 
     <div class="card-scene">
       <div class="card-3d" id="card-3d" onclick="flipCard()">
@@ -495,7 +532,7 @@
   <!-- QUIZ MODE -->
   <div id="quiz-mode">
     <div class="controls">
-      <select id="quiz-vocab-select" onchange="initQuiz()"><!-- JS --></select>
+      <select id="quiz-vocab-select"><!-- JS --></select>
       <button class="btn primary" onclick="initQuiz()">▶ New Quiz</button>
     </div>
     <div class="quiz-score">Score: <strong id="q-score">0</strong> / <span id="q-total">0</span></div>
@@ -1808,26 +1845,10 @@ let currentCard = 0;
 let isFlipped = false;
 let shuffled = false;
 let cardOrder = [];
-let learned;
-try {
-  learned = new Set(JSON.parse(localStorage.getItem('heb_learned') || '[]'));
-} catch (e) {
-  learned = new Set();
-  localStorage.removeItem('heb_learned');
-}
+let learned = new Set(JSON.parse(localStorage.getItem('heb_learned') || '[]'));
 let quizIndex = 0;
 let quizScore = 0;
 let quizAnswered = false;
-let answeredQuestions = 0;
-
-function shuffleArray(arr) {
-  const copy = [...arr];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
 
 // ── Init selects ──
 function buildSelects() {
@@ -1888,11 +1909,15 @@ function renderCard() {
       <span class="cognate-def">${c.def}</span>
     </div>`).join('');
 
-  // Progress
-  const pct = ((currentCard + 1) / cardOrder.length * 100).toFixed(1);
+  // Progress — shows learned % for this set
+  const totalInSet = cardOrder.length;
+  const learnedInSet = cardOrder.filter(i => learned.has(`${currentSet}-${i}`)).length;
+  const pct = totalInSet > 0 ? (learnedInSet / totalInSet * 100).toFixed(0) : 0;
   document.getElementById('progress-fill').style.width = pct + '%';
-  document.getElementById('card-counter').textContent =
-    `Card ${currentCard + 1} of ${cardOrder.length}`;
+  document.getElementById('prog-label-left').textContent =
+    `Card ${currentCard + 1} of ${totalInSet}`;
+  document.getElementById('prog-label-right').textContent =
+    `${learnedInSet} / ${totalInSet} learned (${pct}%)`;
 
   // Reset flip
   document.getElementById('card-3d').classList.remove('flipped');
@@ -1929,15 +1954,19 @@ function rateCard(r) {
     learned.add(key);
     saveLearnedToStorage();
     updateStats();
+    toast('Marked as learned ✓');
   } else if (r === 'hard') {
     learned.delete(key);
     saveLearnedToStorage();
     updateStats();
+    toast('Marked for review ✕');
   }
+  // medium: just advance without changing learned status
   nextCard();
 }
 
 function resetLearned() {
+  if (!confirm('Reset all learned progress? This cannot be undone.')) return;
   learned.clear();
   saveLearnedToStorage();
   updateStats();
@@ -1966,7 +1995,6 @@ function initQuiz() {
     : VOCAB_SETS[+val].entries.map((e, i) => ({ ...e, setIndex: +val, entryIndex: i }));
   quizScore = 0;
   quizIndex = 0;
-  answeredQuestions = 0;
   document.getElementById('q-score').textContent = quizScore;
   document.getElementById('q-total').textContent = 0;
   document.getElementById('stat-score').textContent = '—';
@@ -1983,52 +2011,43 @@ function nextQuestion() {
     return;
   }
 
-  // total updates after answers are submitted
+  quizIndex++;
+  document.getElementById('q-total').textContent = quizIndex;
 
   const correct = quizPool[Math.floor(Math.random() * quizPool.length)];
   quizQuestion = correct;
   document.getElementById('q-word').textContent = correct.heb;
 
   // 3 wrong options
-  const usedDefs = new Set();
-  const wrongs = shuffleArray(
-    quizPool.filter(e => e.heb !== correct.heb && e.def !== correct.def)
-  ).filter(e => {
-    if (usedDefs.has(e.def)) return false;
-    usedDefs.add(e.def);
-    return true;
-  }).slice(0, 3);
-
-  const options = shuffleArray([...wrongs, correct]);
+  const wrongs = quizPool
+    .filter(e => e.heb !== correct.heb)
+    .sort(() => Math.random() - .5)
+    .slice(0, 3);
+  const options = [...wrongs, correct].sort(() => Math.random() - .5);
 
   document.getElementById('q-options').innerHTML = options.map(o =>
-    `<button class="quiz-opt" data-heb="${o.heb}" onclick="checkAnswer(this, '${o.heb.replace(/'/g,"\\'")}', '${correct.heb.replace(/'/g,"\\'")}')">
+    `<button class="quiz-opt" data-heb="${o.heb}" data-correct="${correct.heb}" onclick="checkAnswer(this)">
       ${o.def.length > 80 ? o.def.slice(0, 80) + '…' : o.def}
     </button>`
   ).join('');
 }
 
-function checkAnswer(btn, chosen, correct) {
+function checkAnswer(btn) {
   if (quizAnswered) return;
   quizAnswered = true;
+  const chosen  = btn.dataset.heb;
+  const correct = btn.dataset.correct;
   const btns = document.querySelectorAll('.quiz-opt');
   btns.forEach(b => {
     b.disabled = true;
-    const isCorrect = b.dataset.heb === correct;
-    if (b === btn) b.classList.add(chosen === correct ? 'correct' : 'wrong');
-    if (isCorrect) b.classList.add('correct');
+    if (b.dataset.heb === correct) b.classList.add('correct');
   });
-
-  answeredQuestions++;
-  quizIndex = answeredQuestions;
-  document.getElementById('q-total').textContent = answeredQuestions;
-
+  if (chosen !== correct) btn.classList.add('wrong');
   if (chosen === correct) {
     quizScore++;
     document.getElementById('q-score').textContent = quizScore;
+    document.getElementById('stat-score').textContent = `${quizScore}/${quizIndex}`;
   }
-  document.getElementById('stat-score').textContent =
-      `${quizScore}/${answeredQuestions}`;
   document.getElementById('q-next-btn').style.display = 'inline-block';
 }
 
@@ -2059,10 +2078,10 @@ function switchMode(mode) {
     b.classList.toggle('active', ['flashcard','quiz','browse'][i] === mode);
   });
   document.getElementById('flashcard-mode').style.display = mode === 'flashcard' ? 'block' : 'none';
-  document.getElementById('quiz-mode').style.display = mode === 'quiz' ? 'block' : 'none';
-  document.getElementById('browse-mode').style.display = mode === 'browse' ? 'block' : 'none';
+  document.getElementById('quiz-mode').style.display      = mode === 'quiz'       ? 'block' : 'none';
+  document.getElementById('browse-mode').style.display    = mode === 'browse'     ? 'block' : 'none';
   if (mode === 'browse') renderBrowse();
-  if (mode === 'quiz') initQuiz();
+  // Quiz initializes only when user presses "New Quiz"
 }
 
 // ── Toast ──
@@ -2072,6 +2091,27 @@ function toast(msg) {
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2200);
 }
+
+// ── Keyboard Navigation ──
+document.addEventListener('keydown', e => {
+  const active = document.getElementById('flashcard-mode').style.display;
+  const inFlash = active !== 'none';
+
+  if (inFlash) {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); nextCard(); }
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   { e.preventDefault(); prevCard(); }
+    if (e.key === ' ' || e.key === 'f' || e.key === 'F') { e.preventDefault(); flipCard(); }
+    if ((e.key === 'e' || e.key === 'E') && isFlipped)   rateCard('easy');
+    if ((e.key === 'h' || e.key === 'H') && isFlipped)   rateCard('hard');
+    if ((e.key === 'm' || e.key === 'M') && isFlipped)   rateCard('medium');
+  }
+
+  // Quiz: Enter/Space to go to next question
+  const inQuiz = document.getElementById('quiz-mode').style.display !== 'none';
+  if (inQuiz && quizAnswered) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nextQuestion(); }
+  }
+});
 
 // ── Boot ──
 buildSelects();
